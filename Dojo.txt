@@ -1,0 +1,531 @@
+﻿
+Welcome to the Portland FSharp Meetup Group's Coding Dojo: Theseus and Minotaur!
+================================================================================
+
+Today we'll be puting together a small re-enactment of the encounter between 
+Theseus and the Minotaur.  For this exercise, it is only important to know that
+the Minotaur was in a labyrinth (actually _The_ Labyrinth) and that a guy name
+Theseus managed to get in and out, killing the Minotaur and freeing some prisoners
+in the process.  There's also something about a ball of string, but we'll let that
+got for now.
+
+We start off with a data file "lame_labyrinth.data" that contains an ascii drawing of
+a, well, pretty lame labyrinth.  Go ahead, open it up in a text editor of choice and 
+take a look at it.  Unless something went wrong it should look like this:
+
+######################
+#--$-------#--------##
+######-#######-#######
+#----------#---#--#-@X
+#----------#-#-##-#-##
+#---*--------#--#----#
+#----------#-####-#-##
+#----------#------#--#
+######-#######-##-#-##
+#------#--#----#--#--#
+#-####-##---####-#####
+######################  
+
+It's not much of a labyrinth, but will suffice for now.
+
+You'll notice the following conventions:
+
+	# = Wall
+	- = Passage area
+	X = The Entrance/Exit
+	@ = Theseus
+	* = Minotaur
+	$ = Prisoner
+
+The objective of this tiny game is to guide Theseus through the labyrinth to the Prisoner.  Avoid
+the Minotaur.  Until the Prisoner has been found, the Minotaur's strike is deadly to Theseus.  
+After the Prisoner has been found (should merge into Theseus's character), Theseus' strike is deadly
+to the Minotaur.  Then, it's just a matter of walking back to the Exit.  It's a simple game, but
+there's a lot to do in the time we have to do it.  So, let's get going!
+
+STEP 1) Open the libraries we'll need:
+
+	open System
+	open System.IO
+
+
+
+STEP 2) Some mandatory preliminary modeling:
+
+	We know the symbols used in the data file, so let's make some literals to refer back to them
+	when we need them.  The literal tag isn't strictly necessary.
+
+	[<Literal>]
+	let Wall = 35uy
+	[<Literal>]
+	let Passage = 45uy
+	[<Literal>]
+	let Exit = 88uy
+	[<Literal>]
+	let Theseus = 64uy
+	[<Literal>]
+	let Minotaur = 42uy
+	[<Literal>]
+	let Prisoner = 36uy
+
+	Are we supposed to know these values by memory?  No.  Use the F# Interactive and type, for example,
+	the code: byte '@'.  You'll get 64uy.  F# Interactive can be very useful in this way!
+
+	We also know the width and height of the labyrinth.  These values will be useful in a few spots, so
+	we might as well declare them now.  Add them to the block of literals:
+
+	[<Literal>]
+	let Width = 22
+	[<Literal>]
+	let Height = 12
+
+
+
+STEP 3) Read and display the labyrinth 
+
+	There are many ways to model the labyrinth.  We chose here to model the labyrinth as an array of
+	bytes.  This makes reading the file simple and, with the help of two translation functions, it's 
+	easy to go back and forth between an array position and a coordinate position.  
+
+	type Labyrinth = byte array
+
+	let translateFromPosition (x,y) = 
+		x + ( y * Width )
+
+	let translateToPosition i =
+		let x = i - ((i/Width) * Width) 
+		let y = (i/Width)
+		(x,y)
+
+	We use the translateFromPosition when we know the X, Y coordinate and need to know the index of the 
+	corresponding array element. 
+
+	We use the translateToPosition when we know the array element index and need to know the corresponding
+	X, Y coorrdinate.
+
+	For now, to read the labyrinth and display it we can do this (we'll be coming back to this later):
+
+	    let allBytes = 
+			File.ReadAllBytes fileName
+			|> Array.filter(fun b -> b <> 10uy && b <> 13uy)
+
+		for x in [0 .. Width - 1 ] do 
+			for y in [0 .. Height - 1] do 
+				Console.SetCursorPosition(x,y)
+				Console.Write (allBytes.[translateFromPosition(x,y)] |> char) 
+
+
+STEP 4) Model the Game's state
+
+	There are many ways to model the game.  We need to track a few different aspects: we need to 
+	know where Theseus, the Minotaur and the Prisoner are.  We need to know if we should be drawing them
+	and whether we should be able to move them.  We need to know where the Exit is.  We need to know 
+	where we are in the progress of the game.  For example, has Theseus found the Prisoner yet?  It's
+	an important moment in the game because it is after this moment that an encounter with the Minotaur
+	will be advantageous to Theseus (by the arbitrary rules set out at the beginning).
+
+	While not strictly necessary, we've chosen to put together the components of the game in a single
+	Game record type.  This can be passed around conveniently and can be used to derive new state
+	easily.  
+
+	We'll start with the phases of the game.  We need to know when the game has Started (naturally),
+	we need to know when the Prisoner was found, when the Minotaur was killed (to allow Theseus to exit),
+	whether the Exit has been found and whether Theseus has been killed (to stop the game).  The Discriminated
+	Union below will do nicely.
+
+	type GamePhase = 
+    | Started
+    | PrisonerFound
+    | MinotaurKilled
+    | TheseusKilled
+    | ExitFound
+
+
+	We define a Character record type as well.  Here, we have in one convenient place the position
+	(a tuple of ints), symbol, color (to make this visually more interesting) and whether or not 
+	we should draw the character (we don't draw the Prisoner once the Prisoner has been rescued) and 
+	whether or not we should be moving the character.  It's rather disappointing if Minotaur keeps 
+	moving after he's been killed. 
+
+	type Character = 
+    {
+        Position: int * int
+        Symbol: char 
+        Color: ConsoleColor
+        Draw: bool
+        Move: bool
+    }
+
+
+	Finally, the Game record type that has our characters (as defined above), a game phase, an Exit
+	location and the labyrinth data (the byte array):
+
+	type Game = 
+    {
+        Labyrinth: Labyrinth
+        Theseus: Character
+        Minotaur: Character
+        Prisoner: Character
+        ExitPos: int * int
+        Phase: GamePhase
+    }
+
+
+
+STEP 5) Revisit our drawing code and change it to utilize the Game state record type.  Also,
+		add some code to draw a character (used for Theseus, Minotaur and Prisoner):
+
+	let drawCharacter (c:Character) =
+		if c.Draw 
+		then 
+			let (x,y) = c.Position
+			Console.ForegroundColor <- c.Color
+			Console.SetCursorPosition(x,y)
+			Console.Write(c.Symbol)
+			Console.SetCursorPosition(0, Height + 2) 
+			Console.ResetColor()
+
+	let draw state = 
+		for x in [0 .. Width - 1 ] do 
+			for y in [0 .. Height - 1] do 
+				Console.SetCursorPosition(x,y)
+				Console.Write (state.Labyrinth.[translateFromPosition(x,y)] |> char) 
+		drawCharacter state.Theseus
+		drawCharacter state.Minotaur
+		drawCharacter state.Prisoner
+
+	
+	Here, we see virtually the same drawing code as we had before.  Now, it runs off of the game's state.
+	If you're still new to F#, you'll notice two interesting things in particular in the drawCharacter
+	function.  First, we're using the <- operator to mutably assign the value of c.Color to Console.ForegroundColor.
+	This means that ForegroundColor is mutable and indeed is being set back when we call ResetColor later.
+	Second, you may be wondering where the 'else' clause is.  If-then-else, right?  In this case, Console.ResetColor()
+	returns a unit.  This is a type that is equivalent to a no-op side-effect.  If we had an else clause it would 
+	be simply else (), which can be implied.  If Console.ResetColor() did not return a unit; if it
+	instead returned an int, for example, then we would be forced to add the else clause and return an int from
+	there as well.
+
+
+STEP 6) Set up the Game state
+
+	OK.  There's a lot going on here, but at the end it is simply building up a Game state.
+	Given a file name, the startGame function reads all the bytes, filtering off the line
+	feeds and carriage returns.  A further filtration happens to remove the characters from
+	the data.  Making the map by hand, it is convenient to just type the characters where we
+	want them to start; right on the map, but we want to extract that information and draw
+	them separately from the labyrinth map so that they can move around.
+
+	In stark contrast to everything else, we're getting a little fancy here with checking
+	for the existence of the characters in the data and throwing and exception if they are not
+	there (failwith).  We hard-code the colors.  Go ahead, pick different colors if you like.  
+
+	let startGame fileName = 
+		let allBytes = 
+			File.ReadAllBytes fileName
+			|> Array.filter(fun b -> b <> 10uy && b <> 13uy)
+		let withoutCharacters = 
+			allBytes
+			|> Array.map(fun b -> 
+				if b <> Wall && b <> Passage && b <> Exit then Passage else b)
+		{
+			Game.Labyrinth = withoutCharacters
+			Game.Theseus =
+				let index = Array.FindIndex(allBytes, fun b -> b = Theseus)
+				if index < 0 
+				then failwith (sprintf "Labyrinth data does not have Theseus ('%x')" Theseus)
+            
+				{   Position = index |> translateToPosition
+					Symbol = Theseus |> char
+					Draw = true
+					Move = true
+					Color = ConsoleColor.Cyan }
+			Game.Minotaur = 
+				let index = Array.FindIndex(allBytes, fun b -> b = Minotaur)
+				if index < 0
+				then failwith (sprintf "Labyrinth data does not have Minotaur ('%x')" Minotaur)
+
+				{   Position = index |> translateToPosition
+					Symbol = Minotaur |> char
+					Draw = true
+					Move = true
+					Color = ConsoleColor.Yellow }
+			Game.ExitPos = 
+				let index = Array.FindIndex(allBytes, fun b -> b = Exit)
+				if index < 0 
+				then failwith (sprintf "Labyrinth data does not have Exit ('%x')" Exit)
+
+				index |> translateToPosition
+			Game.Prisoner = 
+				let index = Array.FindIndex(allBytes, fun b -> b = byte(Prisoner))
+				if index < 0 
+				then failwith (sprintf "Labyrinth data does not have Prisoner ('%x')" Prisoner)
+
+				{   Position = index |> translateToPosition
+					Symbol = Prisoner |> char
+					Draw = true
+					Move = true
+					Color = ConsoleColor.Red }
+			Game.Phase = Started
+		}
+
+	
+
+STEP 7) Create a game loop (simplest version - we'll come back to this again)
+
+	let moveTheseus state = 
+		state
+
+	let runGame () = 
+		let rec loop state = 
+			let newState = 
+				state 
+				|> moveTheseus
+			draw newState
+			loop newState
+		let initialState = startGame @"..\..\lame_labyrinth.data"
+		draw initialState
+		loop initialState
+
+	[<EntryPoint>]
+	let main argv = 
+		printfn "%A" argv
+
+		runGame()    
+
+		0 // return an integer exit code
+
+
+	Note that we haven't implemented the moveTheseus function yet!  This is just a placeholder.  
+
+	So, what is going on here?  The function runGame is called once from main.  _Inside_ it, there's a 
+	recursive function called "loop" (you'll see this convention frequently) that takes a state (a Game state).
+	This state is piped to moveTheseus to obtain a new state.  Of course, at this moment, it is still the
+	same state; a pass-through.  We'll add the meat later.  Then, we draw the new state and pass it 
+	to loop.  However, none of that happens yet.  First, the initialState is created from our startGame 
+	function (your path to the data file may be differet: beware!), we draw it and then call loop for 
+	the first time with this initial state.
+
+
+
+STEP 8) Make Theseus move around the board
+
+	If you've been following along patiently waiting for a chance to do your own coding (instead of
+	copy-pasting), then take a whack at this function before looking at the solution we came up with.
+	We're finally at the point in this project where we can have a healthy amount of variation in the
+	solution and still be on the same page with each other.
+
+
+	Here's what we came up with:
+
+	let verifyMove state proposed =
+		let (x,y) = proposed 
+
+		if x < 0 || x > ( Width - 1) || y < 0 || y > ( Height - 1 ) 
+		then state 
+		else
+    
+		match state.Labyrinth.[translateFromPosition(x,y)] with 
+		| b when b = Wall -> state
+		| _ -> { state with Theseus = { state.Theseus with Position = proposed } }
+
+	let moveTheseus (state:Game) = 
+		if state.Theseus.Move = false 
+		then state
+		else
+
+		let (x,y) = state.Theseus.Position
+        
+		match Console.ReadKey(true).Key with 
+		| ConsoleKey.UpArrow ->
+			(x, y - 1) |> verifyMove state 
+		| ConsoleKey.DownArrow -> 
+			(x, y + 1) |> verifyMove state 
+		| ConsoleKey.RightArrow -> 
+			(x + 1, y) |> verifyMove state 
+		| ConsoleKey.LeftArrow ->      
+			(x - 1, y) |> verifyMove state 
+		| _ -> state
+
+	The function verifyMove is making sure that Theseus doesn't leave the logical space of the labyrinth.
+	Also, that he cannot pass through walls.  How cool would that be?  Go ahead, replace these lines in
+	moveTheseus ...
+
+			(x, y - 1) |> verifyMove state 
+
+	... with 
+
+			{ state with Theseus = { state.Theseus with Position = (x, y - 1) } }		
+
+	... and experience the liberating freedom of being able to walk through walls.  Only, don't go to the 
+	edge of the map, you'll also experience invalid array index reference errors.
+
+	Again, we encourage you to play a bit. Switch out arrow keys for WADS.  Make it possible to move
+	diagonally.  You decide!
+	
+
+STEP 9) Make the Minotaur move.
+
+	Now for some real fun.  Let us make the Minotaur move around a bit.
+	
+	For our solution, we decided to add another type.  This type holds position (potential position)
+	information and the element that would be found at that position.
+
+	Given the state of the game and a potential position we formulate the PossibleMove.  We do this 
+	in a list for the four directions from the Minotaur's current position.  By having these in a list,
+	it is very easy to add diagonals if you want later.
+
+	We filter off any possible moves that would end up in a wall.  Wasn't that nice?  No if-then checking
+    required --- just filter out the undesired options!
+  
+	
+	type PossibleMove =
+    {
+        Position: int * int
+        Element: byte
+    }
+
+	let formulatePossibleMove (state:Game) (x,y) = 
+		{ Position = (x,y); Element = state.Labyrinth.[translateFromPosition(x,y)] }    
+
+	let moveMinotaur (state:Game) = 
+		if state.Minotaur.Move = false 
+		then state
+		else
+
+		let (x,y) = state.Minotaur.Position
+		let moveOptions = 
+			[   
+				formulatePossibleMove state (x+1,y)
+				formulatePossibleMove state (x-1,y)
+				formulatePossibleMove state (x,y+1)
+				formulatePossibleMove state (x,y-1)                
+			]
+			|> List.filter(fun m -> m.Element <> Wall)
+
+		// TODO: Make a more interesting Minotaur!            
+
+		let rnd = new System.Random()
+		{ state with 
+			Minotaur = { state.Minotaur with 
+							Position = moveOptions.[rnd.Next() % moveOptions.Length].Position } } 
+							
+	In this example, we punt and just select a random possible move from the number possible.  Remarkably,
+	this, in conjunction with the structure of the lame labyrinth and the nice big room that the Minotaur 
+	starts in, creates a reasonably realistic effect of a brooding monster pacing in the dark, waiting for
+	its next victim.  However, we think you can do better and using the phase of the game, make a more salient
+	opponent.
+	
+	For example, if the Prisoner hasn't been found yet, the Minotaur has the advantage and should use it
+	to pursue Theseus if in sight.  See if you can figure out how to do that.  You can!
+	
+	Be sure to add the moveMinotaur function to the game loop.  Now, you see why we piped before.
+	
+		let runGame () = 
+		let rec loop state = 
+			let newState = 
+				state 
+				|> moveTheseus
+				|> moveMinotaur
+			draw newState
+			loop newState
+		let initialState = startGame @"..\..\lame_labyrinth.data"
+		draw initialState
+		loop initialState 	
+		
+		
+		
+STEP 10) Implement the actual game logic
+
+	These instructions implement the specified design.  But, this is a place where things
+	could be changed up.  This is the place where we enforce the flow of the game between
+	it's states.  Notice that going to the Exit doesn't help unless the Minotaur is killed.
+	When the game is just in a "normal" Started mode, Theseus can be killed by an encounter
+	with the Minotaur or happily find the Prisoner.  If the Prisoner has been found, then
+	the Minotaur's bad luck begins.  In all cases, a state is returned.  Sometimes "updated"
+	by what has transpired, other times it is returned just the way it came in.  If you're still
+	new to F#, notice how we've set only those fields of the record type that we want to be
+	different in the new state by using the 'with' key word after the input state inside 
+	curly braces.
+
+	let evaluateGame (g:Game) = 
+		match g.Phase with 
+		| MinotaurKilled -> 
+			if g.Theseus.Position = g.ExitPos then 
+				{ g with Phase = ExitFound } 
+			else g
+		| Started -> 
+			if g.Theseus.Position = g.Minotaur.Position then 
+				{ g with Phase = TheseusKilled; Theseus = { g.Theseus with Move = false }} 
+			elif g.Theseus.Position = g.Prisoner.Position then 
+				{ g with Phase = PrisonerFound; Prisoner = { g.Prisoner with Draw = false; Move = false }}
+			else g
+		| PrisonerFound -> 
+			if g.Theseus.Position = g.Minotaur.Position then 
+				{ g with Phase = MinotaurKilled; Minotaur = { g.Minotaur with Move = false } }
+			else g
+		| _ -> g	
+		
+
+	Finally, we need to make some changes to the runGame function so that the result of evaluation
+	can be used to exit the game.  We've added some text to make it clear what happened.  The extra
+	space at the end is to make each output statement the same length since these will be printing
+	in the same location; and that's just an easy way to overwrite the previous text without
+	leaving any characters hanging around.  
+
+	let runGame () = 
+		let rec loop state = 
+			let newState = 
+				state 
+				|> moveTheseus
+				|> moveMinotaur
+			draw newState
+			match evaluateGame newState with 
+			| g when g.Phase = ExitFound ->
+				printfn "Theseus has escaped alive!           "
+			| g when g.Phase = TheseusKilled -> 
+				printfn "Theseus was killed!"
+			| g when g.Phase = PrisonerFound ->
+				printfn "Hooray!  The prisoner has been found!"
+				loop g
+			| g when g.Phase = MinotaurKilled -> 
+				printfn "Theseus killed the Minotaur!         "
+				loop g
+			| _ -> loop newState
+		let initialState = startGame @"..\..\lame_labyrinth.data"
+		draw initialState
+		loop initialState		
+		
+		
+		
+STEP 11) Play the game and then go back and change things up.  
+
+	In particular:
+	
+		1) The Minotaur AI could be improved. 
+		2) Instead of having hard-coded width/height of the labyrinth map, try inferring these
+		   from the data themselves (hint: use the first line feed)
+		3) When drawing the labyrinth map, try setting the Console cursor position only when
+		   necessary and allowing Write to push it forward (to help reduce flicker).
+		4) Add some more characters/character types to the game.  Why not?  What about 
+		   Ariadne (you know, the daughter of Minos and Pasiphae who gave Theseus the ball of string)?
+		5) Make it so that the Prisoner also moves around.  
+		6) Make it so that Minotaur can find/kill the Prisoner and actually win the game.
+		7) Automate Theseus.  How long would it take the computer playing itself to arrive at 
+		   a terminal game state?  Let's find out!
+
+		
+STEP 12) Ultimate challenge: generate a labyrinth programmatically!
+
+	If you flew through this quasi-dojo/build-along and you feel up to the challenge,
+	see if you can dig back into your memory of algorithms class and conjure up the work
+	of Prim, Dijkstra and others to create a labyrinth programmatically.  Can you do it without
+	mutability?  Can you preserve a nice room for the Minotaur to hang out in?
+	
+	Since we might run out of time before you finish your labyrinth generator, please share with
+	the group your results either by posting a comment with a link to a public on-line repository
+	or by bringing it along to the next Meetup.  Some of the coolest things have come from "homework"
+	that we work on in the days and weeks between Meetups.
+	
+
+Thank you.  I hope you had fun and learned something along the way.  We look forward to seeing you at
+the next Meetup!     								 
